@@ -71,6 +71,13 @@
     cursor: pointer; background: transparent; transition: border-color 0.15s, color 0.15s;
   }
   .example-chip:hover { border-color: var(--accent); color: var(--accent); }
+  .checks-row {
+    display: flex; gap: 1.1rem; flex-wrap: wrap; align-items: center;
+    margin-bottom: 1rem; font-size: 0.85rem; color: var(--text-dim);
+  }
+  .checks-row label { display: flex; align-items: center; gap: 0.4rem; cursor: pointer; }
+  .checks-row input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
+  .checks-row .select-all { color: var(--accent); cursor: pointer; font-size: 0.8rem; text-decoration: underline; background: none; border: none; padding: 0; }
   #result { display: none; }
   .verdict-banner {
     display: flex; align-items: center; gap: 0.6rem; padding: 0.85rem 1rem;
@@ -139,6 +146,15 @@
         <button class="example-chip" data-val="44.55.66.77">44.55.66.77</button>
         <button class="example-chip" data-val="https://example.com/path">https://example.com/path</button>
       </div>
+      <div class="checks-row">
+        <span>Checks:</span>
+        <label><input type="checkbox" class="check-box" value="reputation" checked> Reputation</label>
+        <label><input type="checkbox" class="check-box" value="domain_age" checked> Domain age</label>
+        <label><input type="checkbox" class="check-box" value="ssl" checked> SSL cert</label>
+        <label><input type="checkbox" class="check-box" value="asn" checked> Hosting ASN</label>
+        <button type="button" class="select-all" id="select-all-btn">select all</button>
+        <button type="button" class="select-all" id="select-none-btn">none</button>
+      </div>
       <form class="demo-form" id="demo-form">
         <input id="indicator" type="text" placeholder="Type an IP, domain, hash, or URL..." autocomplete="off" required>
         <button type="submit" id="submit-btn">Check</button>
@@ -157,7 +173,8 @@
       <ul class="arch-list">
         <li><span class="num">01</span><div><strong>Detect.</strong> <span>Classifies the input as ip/domain/hash/url before picking which source endpoints to call.</span></div></li>
         <li><span class="num">02</span><div><strong>Enrich, in parallel.</strong> <span>Queries VirusTotal + AbuseIPDB concurrently. A missing key, rate limit, or network error degrades that one source instead of failing the whole lookup.</span></div></li>
-        <li><span class="num">03</span><div><strong>Aggregate.</strong> <span>Converts each source's own scoring scheme into one clean / suspicious / malicious / unknown verdict.</span></div></li>
+        <li><span class="num">02b</span><div><strong>Add context, optionally.</strong> <span>Domain age (WHOIS), SSL certificate issuance date, and hosting ASN/network - selectable via <code>checks=</code>, kept separate from the verdict since they're evidence to weigh, not a reputation score.</span></div></li>
+        <li><span class="num">03</span><div><strong>Aggregate.</strong> <span>Converts each reputation source's own scoring scheme into one clean / suspicious / malicious / unknown verdict.</span></div></li>
         <li><span class="num">04</span><div><strong>Cache.</strong> <span>Repeat lookups skip the free-tier rate limits for an hour by default.</span></div></li>
       </ul>
     </div>
@@ -186,10 +203,25 @@
     chip.addEventListener('click', () => { input.value = chip.dataset.val; form.requestSubmit(); });
   });
 
+  const checkBoxes = document.querySelectorAll('.check-box');
+  document.getElementById('select-all-btn').addEventListener('click', () => {
+    checkBoxes.forEach(cb => cb.checked = true);
+  });
+  document.getElementById('select-none-btn').addEventListener('click', () => {
+    checkBoxes.forEach(cb => cb.checked = false);
+  });
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const indicator = input.value.trim();
     if (!indicator) return;
+
+    const selectedChecks = Array.from(checkBoxes).filter(cb => cb.checked).map(cb => cb.value);
+    if (selectedChecks.length === 0) {
+      errorBox.textContent = 'Select at least one check.';
+      errorBox.style.display = 'block';
+      return;
+    }
 
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span>';
@@ -197,7 +229,8 @@
     errorBox.style.display = 'none';
 
     try {
-      const resp = await fetch(`/demo/enrich?indicator=${encodeURIComponent(indicator)}`);
+      const checksParam = encodeURIComponent(selectedChecks.join(','));
+      const resp = await fetch(`/demo/enrich?indicator=${encodeURIComponent(indicator)}&checks=${checksParam}`);
       const data = await resp.json();
 
       if (!resp.ok) {

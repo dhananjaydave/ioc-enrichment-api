@@ -21,6 +21,9 @@ from .aggregator import compute_verdict
 from .cache import TTLCache
 from .detector import detect_type
 from .sources.abuseipdb import AbuseIPDBClient
+from .sources.asn_lookup import ASNLookupClient
+from .sources.domain_age import DomainAgeClient
+from .sources.ssl_info import SSLInfoClient
 from .sources.virustotal import VirusTotalClient
 
 app = FastAPI(
@@ -42,6 +45,16 @@ async def add_security_headers(request: Request, call_next):
 cache = TTLCache(ttl_seconds=int(os.environ.get("CACHE_TTL_SECONDS", "3600")))
 vt_client = VirusTotalClient()
 abuse_client = AbuseIPDBClient()
+domain_age_client = DomainAgeClient()
+ssl_info_client = SSLInfoClient()
+asn_lookup_client = ASNLookupClient()
+
+# "reputation" (VirusTotal + AbuseIPDB) feeds the malicious/suspicious/clean
+# verdict. The other three are contextual, not scored - a new domain or an
+# unusual hosting ASN is evidence to weigh, not a verdict on its own, so
+# they're reported separately as "context" rather than mixed into "sources".
+ALL_CHECKS = {"reputation", "domain_age", "ssl", "asn"}
+DEFAULT_CHECKS = {"reputation"}  # keeps existing callers (e.g. the phishing triage bot) fast and unchanged
 
 # Optional - if set, every request to /enrich needs a matching X-API-Key header.
 # Without this, a publicly deployed instance lets anyone burn through *your*
@@ -63,6 +76,7 @@ class EnrichResponse(BaseModel):
     checked_at: str
     cached: bool
     sources: list[dict]
+    context: list[dict] = []
 
 
 def _check_auth(x_api_key: str | None) -> None:
@@ -95,33 +109,60 @@ def _demo_rate_limited(ip: str) -> bool:
 MAX_INDICATOR_LENGTH = 2048
 
 
-async def _perform_enrichment(indicator: str) -> dict:
+def _parse_checks(checks: str | None) -> set[str]:
+    if checks is None:
+        return set(DEFAULT_CHECKS)  # no param at all - keep existing callers fast and unchanged
+    if checks.strip().lower() == "all":
+        return set(ALL_CHECKS)
+    requested = {c.strip().lower() for c in checks.split(",") if c.strip()}
+    unknown = requested - ALL_CHECKS
+    if unknown:
+        raise ValueError(f"Unknown check(s): {', '.join(sorted(unknown))}. Valid options: {', '.join(sorted(ALL_CHECKS))}")
+    return requested or set(DEFAULT_CHECKS)
+
+
+async def _perform_enrichment(indicator: str, checks: set[str]) -> dict:
     if len(indicator) > MAX_INDICATOR_LENGTH:
         raise ValueError(f"Indicator too long (max {MAX_INDICATOR_LENGTH} characters)")
     indicator_type = detect_type(indicator)
 
-    cache_key = f"{indicator_type}:{indicator}"
+    cache_key = f"{indicator_type}:{indicator}:{','.join(sorted(checks))}"
     cached = cache.get(cache_key)
     if cached:
         return {**cached, "cached": True}
 
-    results = await asyncio.gather(
-        vt_client.lookup(indicator, indicator_type),
-        abuse_client.lookup(indicator, indicator_type),
-    )
+    reputation_results: list[dict] = []
+    context_results: list[dict] = []
+
+    tasks = []
+    if "reputation" in checks:
+        tasks.append(("reputation", vt_client.lookup(indicator, indicator_type)))
+        tasks.append(("reputation", abuse_client.lookup(indicator, indicator_type)))
+    if "domain_age" in checks:
+        tasks.append(("context", domain_age_client.lookup(indicator, indicator_type)))
+    if "ssl" in checks:
+        tasks.append(("context", ssl_info_client.lookup(indicator, indicator_type)))
+    if "asn" in checks:
+        tasks.append(("context", asn_lookup_client.lookup(indicator, indicator_type)))
+
+    results = await asyncio.gather(*(t[1] for t in tasks))
+    for (bucket, _), result in zip(tasks, results):
+        (reputation_results if bucket == "reputation" else context_results).append(result)
+
     response = {
         "indicator": indicator,
         "type": indicator_type,
-        "verdict": compute_verdict(results),
+        "verdict": compute_verdict(reputation_results),
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "cached": False,
-        "sources": list(results),
+        "sources": reputation_results,
+        "context": context_results,
     }
     # Don't cache a transient failure (rate limit, network error) as if it
     # were a stable result - that would lock in "unknown" for the full TTL
     # even after the rate limit clears. "skipped"/"not_applicable" are fine
     # to cache since they won't change until someone adds a key.
-    if not any(r.get("status") == "error" for r in results):
+    if not any(r.get("status") == "error" for r in reputation_results + context_results):
         cache.set(cache_key, response)
     return response
 
@@ -137,22 +178,25 @@ def health():
 
 
 @app.get("/enrich", response_model=EnrichResponse)
-async def enrich(indicator: str, x_api_key: str | None = Header(default=None)):
+async def enrich(indicator: str, checks: str | None = None, x_api_key: str | None = Header(default=None)):
+    """checks: comma-separated subset of reputation,domain_age,ssl,asn (or
+    "all"). Defaults to reputation only, so existing integrations stay fast
+    and unchanged unless they opt into the extra checks."""
     _check_auth(x_api_key)
     try:
-        return await _perform_enrichment(indicator)
+        return await _perform_enrichment(indicator, _parse_checks(checks))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.get("/demo/enrich", response_model=EnrichResponse)
-async def demo_enrich(indicator: str, request: Request):
+async def demo_enrich(indicator: str, request: Request, checks: str | None = None):
     """Same lookup as /enrich, no API key needed - protected by a tight
     per-IP rate limit instead, so the public landing page can offer a real
     live demo without exposing the real key or the real quota to abuse."""
     if _demo_rate_limited(_client_ip(request)):
         raise HTTPException(status_code=429, detail="Demo rate limit reached - try again later, or use your own API key.")
     try:
-        return await _perform_enrichment(indicator)
+        return await _perform_enrichment(indicator, _parse_checks(checks))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

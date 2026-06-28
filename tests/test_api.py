@@ -32,6 +32,10 @@ async def _fake_abuse_skipped(indicator, indicator_type):
     return {"source": "abuseipdb", "status": "skipped", "reason": "no API key configured"}
 
 
+async def _fake_context(source: str):
+    return {"source": source, "status": "ok"}
+
+
 def test_enrich_happy_path(monkeypatch):
     monkeypatch.setattr(api.vt_client, "lookup", _fake_vt_ok)
     monkeypatch.setattr(api.abuse_client, "lookup", _fake_abuse_skipped)
@@ -102,6 +106,71 @@ def test_enrich_requires_api_key_when_configured(monkeypatch):
 def test_enrich_rejects_overlong_indicator():
     resp = client.get("/enrich", params={"indicator": "a" * 3000})
     assert resp.status_code == 400
+
+
+def test_no_checks_param_defaults_to_reputation_only_not_all():
+    """Omitting ?checks entirely must behave exactly like before this
+    feature existed - reputation only, no real WHOIS/SSL/RDAP calls for
+    existing integrations that don't know about the new param."""
+    assert api._parse_checks(None) == {"reputation"}
+
+
+def test_checks_all_keyword_selects_everything():
+    assert api._parse_checks("all") == api.ALL_CHECKS
+
+
+def test_checks_comma_list_selects_only_named_checks():
+    assert api._parse_checks("domain_age,ssl") == {"domain_age", "ssl"}
+
+
+def test_unknown_check_name_is_rejected():
+    resp = client.get("/enrich", params={"indicator": "9.9.9.9", "checks": "not_a_real_check"})
+    assert resp.status_code == 400
+
+
+def test_default_checks_only_calls_reputation_sources(monkeypatch):
+    """Confirms the fix for a real bug: omitting ?checks must NOT trigger
+    the other three (real, unmocked) network-calling sources."""
+    called = {"asn": False, "domain_age": False, "ssl": False}
+
+    async def track_asn(indicator, indicator_type):
+        called["asn"] = True
+        return {"source": "asn_lookup", "status": "ok"}
+
+    async def track_domain_age(indicator, indicator_type):
+        called["domain_age"] = True
+        return {"source": "domain_age", "status": "ok"}
+
+    async def track_ssl(indicator, indicator_type):
+        called["ssl"] = True
+        return {"source": "ssl_info", "status": "ok"}
+
+    monkeypatch.setattr(api.vt_client, "lookup", _fake_vt_ok)
+    monkeypatch.setattr(api.abuse_client, "lookup", _fake_abuse_skipped)
+    monkeypatch.setattr(api.asn_lookup_client, "lookup", track_asn)
+    monkeypatch.setattr(api.domain_age_client, "lookup", track_domain_age)
+    monkeypatch.setattr(api.ssl_info_client, "lookup", track_ssl)
+
+    resp = client.get("/enrich", params={"indicator": "9.9.9.10"})
+    assert resp.status_code == 200
+    assert called == {"asn": False, "domain_age": False, "ssl": False}
+    assert resp.json()["context"] == []
+
+
+def test_checks_all_populates_context_alongside_sources(monkeypatch):
+    monkeypatch.setattr(api.vt_client, "lookup", _fake_vt_ok)
+    monkeypatch.setattr(api.abuse_client, "lookup", _fake_abuse_skipped)
+    monkeypatch.setattr(api.asn_lookup_client, "lookup", lambda i, t: _fake_context("asn_lookup"))
+    monkeypatch.setattr(api.domain_age_client, "lookup", lambda i, t: _fake_context("domain_age"))
+    monkeypatch.setattr(api.ssl_info_client, "lookup", lambda i, t: _fake_context("ssl_info"))
+
+    resp = client.get("/enrich", params={"indicator": "9.9.9.11", "checks": "all"})
+    body = resp.json()
+    assert resp.status_code == 200
+    context_sources = {c["source"] for c in body["context"]}
+    assert context_sources == {"asn_lookup", "domain_age", "ssl_info"}
+    # context never affects the verdict - only "sources" (reputation) does
+    assert body["verdict"] == "malicious"
 
 
 def test_security_headers_present():
