@@ -76,3 +76,75 @@ def test_enrich_requires_api_key_when_configured(monkeypatch):
 
     right_key = client.get("/enrich", params={"indicator": "9.9.9.9"}, headers={"X-API-Key": "secret123"})
     assert right_key.status_code == 200
+
+
+def test_enrich_rejects_overlong_indicator():
+    resp = client.get("/enrich", params={"indicator": "a" * 3000})
+    assert resp.status_code == 400
+
+
+def test_security_headers_present():
+    resp = client.get("/health")
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert resp.headers["x-frame-options"] == "DENY"
+
+
+def test_index_page_serves_html():
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "IOC Enrichment API" in resp.text
+
+
+@pytest.fixture(autouse=True)
+def _clear_demo_rate_limit():
+    api._demo_request_log.clear()
+    yield
+    api._demo_request_log.clear()
+
+
+def test_demo_enrich_works_without_api_key(monkeypatch):
+    monkeypatch.setattr(api, "API_KEY", "secret123")
+    monkeypatch.setattr(api.vt_client, "lookup", _fake_vt_ok)
+    monkeypatch.setattr(api.abuse_client, "lookup", _fake_abuse_skipped)
+
+    resp = client.get("/demo/enrich", params={"indicator": "1.2.3.4"})
+    assert resp.status_code == 200
+    assert resp.json()["verdict"] == "malicious"
+
+
+def test_demo_enrich_rate_limits_per_ip(monkeypatch):
+    monkeypatch.setattr(api.vt_client, "lookup", _fake_vt_ok)
+    monkeypatch.setattr(api.abuse_client, "lookup", _fake_abuse_skipped)
+    monkeypatch.setattr(api, "DEMO_RATE_LIMIT_MAX_REQUESTS", 3)
+
+    headers = {"CF-Connecting-IP": "203.0.113.5"}
+    for i in range(3):
+        resp = client.get("/demo/enrich", params={"indicator": f"1.2.3.{i}"}, headers=headers)
+        assert resp.status_code == 200
+
+    blocked = client.get("/demo/enrich", params={"indicator": "1.2.3.99"}, headers=headers)
+    assert blocked.status_code == 429
+
+
+def test_demo_enrich_rate_limit_uses_cf_connecting_ip_not_spoofable_xff(monkeypatch):
+    """A client setting its own X-Forwarded-For shouldn't be able to evade the
+    rate limit - only the Cloudflare-set CF-Connecting-IP should count."""
+    monkeypatch.setattr(api.vt_client, "lookup", _fake_vt_ok)
+    monkeypatch.setattr(api.abuse_client, "lookup", _fake_abuse_skipped)
+    monkeypatch.setattr(api, "DEMO_RATE_LIMIT_MAX_REQUESTS", 1)
+
+    real_ip = "203.0.113.7"
+    client.get(
+        "/demo/enrich",
+        params={"indicator": "1.1.1.1"},
+        headers={"CF-Connecting-IP": real_ip, "X-Forwarded-For": "1.1.1.1"},
+    )
+    blocked = client.get(
+        "/demo/enrich",
+        params={"indicator": "2.2.2.2"},
+        # Same real client, spoofing a different X-Forwarded-For each time -
+        # should NOT bypass the limit since CF-Connecting-IP is unchanged.
+        headers={"CF-Connecting-IP": real_ip, "X-Forwarded-For": "9.9.9.9"},
+    )
+    assert blocked.status_code == 429

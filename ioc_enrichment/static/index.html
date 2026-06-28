@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IOC Enrichment API</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0e14;
+    --bg-panel: #10151f;
+    --border: #1f2937;
+    --text: #e2e8f0;
+    --text-dim: #8b97a8;
+    --accent: #34d399;
+    --accent-dim: #064e3b;
+    --malicious: #f87171;
+    --suspicious: #fbbf24;
+    --clean: #34d399;
+    --mono: 'JetBrains Mono', monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: radial-gradient(ellipse at top, #0d1320 0%, var(--bg) 60%);
+    color: var(--text);
+    font-family: 'Inter', system-ui, sans-serif;
+    line-height: 1.6;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 4rem 1.5rem 6rem; }
+  .badge-row { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1.5rem; }
+  .badge {
+    font-family: var(--mono); font-size: 0.72rem; padding: 0.25rem 0.6rem;
+    border: 1px solid var(--border); border-radius: 4px; color: var(--text-dim);
+    background: var(--bg-panel);
+  }
+  h1 {
+    font-size: 2.4rem; margin: 0 0 0.5rem; letter-spacing: -0.02em;
+    background: linear-gradient(135deg, #fff 0%, #94a3b8 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .lede { color: var(--text-dim); font-size: 1.1rem; max-width: 640px; margin-bottom: 2.5rem; }
+  .lede code { color: var(--accent); }
+  section { margin-bottom: 3rem; }
+  h2 {
+    font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--accent); margin-bottom: 1rem; font-weight: 600;
+  }
+  .panel {
+    background: var(--bg-panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1.5rem;
+  }
+  .demo-form { display: flex; gap: 0.6rem; margin-bottom: 1rem; }
+  .demo-form input {
+    flex: 1; background: #0a0e14; border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text); padding: 0.7rem 0.9rem; font-family: var(--mono); font-size: 0.92rem;
+  }
+  .demo-form input:focus { outline: none; border-color: var(--accent); }
+  .demo-form button {
+    background: var(--accent); color: #04140f; border: none; border-radius: 6px;
+    padding: 0.7rem 1.4rem; font-weight: 600; cursor: pointer; font-size: 0.92rem;
+    transition: opacity 0.15s;
+  }
+  .demo-form button:hover { opacity: 0.85; }
+  .demo-form button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .examples { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1.25rem; }
+  .example-chip {
+    font-family: var(--mono); font-size: 0.78rem; color: var(--text-dim);
+    border: 1px solid var(--border); border-radius: 100px; padding: 0.25rem 0.75rem;
+    cursor: pointer; background: transparent; transition: border-color 0.15s, color 0.15s;
+  }
+  .example-chip:hover { border-color: var(--accent); color: var(--accent); }
+  #result { display: none; }
+  .verdict-banner {
+    display: flex; align-items: center; gap: 0.6rem; padding: 0.85rem 1rem;
+    border-radius: 8px; font-family: var(--mono); font-weight: 700; font-size: 0.95rem;
+    margin-bottom: 1rem; text-transform: uppercase; letter-spacing: 0.03em;
+  }
+  .verdict-malicious { background: rgba(248,113,113,0.12); color: var(--malicious); border: 1px solid rgba(248,113,113,0.3); }
+  .verdict-suspicious { background: rgba(251,191,36,0.12); color: var(--suspicious); border: 1px solid rgba(251,191,36,0.3); }
+  .verdict-clean { background: rgba(52,211,153,0.12); color: var(--clean); border: 1px solid rgba(52,211,153,0.3); }
+  .verdict-unknown { background: rgba(148,163,184,0.12); color: var(--text-dim); border: 1px solid var(--border); }
+  pre#raw {
+    background: #060a10; border: 1px solid var(--border); border-radius: 8px;
+    padding: 1rem; font-family: var(--mono); font-size: 0.82rem; overflow-x: auto;
+    color: #a5b4c4; margin: 0;
+  }
+  .error-text { color: var(--malicious); font-family: var(--mono); font-size: 0.88rem; }
+  .arch-list { list-style: none; padding: 0; margin: 0; }
+  .arch-list li {
+    padding: 0.9rem 0; border-bottom: 1px solid var(--border); display: flex; gap: 1rem;
+  }
+  .arch-list li:last-child { border-bottom: none; }
+  .arch-list .num {
+    font-family: var(--mono); color: var(--accent); font-weight: 700; flex-shrink: 0; width: 1.5rem;
+  }
+  .arch-list strong { color: var(--text); }
+  .arch-list span { color: var(--text-dim); }
+  .links { display: flex; gap: 1rem; flex-wrap: wrap; }
+  .links a {
+    color: var(--text); text-decoration: none; font-weight: 500; font-size: 0.92rem;
+    display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.6rem 1.1rem;
+    border: 1px solid var(--border); border-radius: 8px; transition: border-color 0.15s, background 0.15s;
+  }
+  .links a:hover { border-color: var(--accent); background: var(--bg-panel); }
+  .links a.primary { background: var(--accent); color: #04140f; border-color: var(--accent); }
+  footer { color: var(--text-dim); font-size: 0.85rem; margin-top: 4rem; font-family: var(--mono); }
+  .spinner {
+    width: 14px; height: 14px; border: 2px solid rgba(4,20,15,0.3);
+    border-top-color: #04140f; border-radius: 50%; animation: spin 0.6s linear infinite; display: inline-block;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="badge-row">
+    <span class="badge">PYTHON 3.12</span>
+    <span class="badge">FASTAPI</span>
+    <span class="badge">VIRUSTOTAL</span>
+    <span class="badge">ABUSEIPDB</span>
+  </div>
+
+  <h1>IOC Enrichment API</h1>
+  <p class="lede">
+    Drop in an IP, domain, hash, or URL — get back one aggregated verdict instead of
+    checking <code>VirusTotal</code> and <code>AbuseIPDB</code> by hand for every alert.
+    Try it live below.
+  </p>
+
+  <section>
+    <h2>Live demo</h2>
+    <div class="panel">
+      <div class="examples">
+        <button class="example-chip" data-val="8.8.8.8">8.8.8.8</button>
+        <button class="example-chip" data-val="google.com">google.com</button>
+        <button class="example-chip" data-val="44.55.66.77">44.55.66.77</button>
+        <button class="example-chip" data-val="https://example.com/path">https://example.com/path</button>
+      </div>
+      <form class="demo-form" id="demo-form">
+        <input id="indicator" type="text" placeholder="Type an IP, domain, hash, or URL..." autocomplete="off" required>
+        <button type="submit" id="submit-btn">Check</button>
+      </form>
+      <div id="result">
+        <div class="verdict-banner" id="verdict-banner"></div>
+        <pre id="raw"></pre>
+      </div>
+      <div id="error" class="error-text" style="display:none;"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>How it works</h2>
+    <div class="panel">
+      <ul class="arch-list">
+        <li><span class="num">01</span><div><strong>Detect.</strong> <span>Classifies the input as ip/domain/hash/url before picking which source endpoints to call.</span></div></li>
+        <li><span class="num">02</span><div><strong>Enrich, in parallel.</strong> <span>Queries VirusTotal + AbuseIPDB concurrently. A missing key, rate limit, or network error degrades that one source instead of failing the whole lookup.</span></div></li>
+        <li><span class="num">03</span><div><strong>Aggregate.</strong> <span>Converts each source's own scoring scheme into one clean / suspicious / malicious / unknown verdict.</span></div></li>
+        <li><span class="num">04</span><div><strong>Cache.</strong> <span>Repeat lookups skip the free-tier rate limits for an hour by default.</span></div></li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <div class="links">
+      <a href="/docs" class="primary">Interactive API docs (Swagger) →</a>
+      <a href="https://github.com/dhananjaydave/ioc-enrichment-api">View source on GitHub →</a>
+    </div>
+  </section>
+
+  <footer>GET /enrich?indicator=&lt;value&gt; — see /docs for the full schema and auth header.</footer>
+</div>
+
+<script>
+  const form = document.getElementById('demo-form');
+  const input = document.getElementById('indicator');
+  const btn = document.getElementById('submit-btn');
+  const resultBox = document.getElementById('result');
+  const banner = document.getElementById('verdict-banner');
+  const raw = document.getElementById('raw');
+  const errorBox = document.getElementById('error');
+
+  document.querySelectorAll('.example-chip').forEach(chip => {
+    chip.addEventListener('click', () => { input.value = chip.dataset.val; form.requestSubmit(); });
+  });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const indicator = input.value.trim();
+    if (!indicator) return;
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>';
+    resultBox.style.display = 'none';
+    errorBox.style.display = 'none';
+
+    try {
+      const resp = await fetch(`/demo/enrich?indicator=${encodeURIComponent(indicator)}`);
+      const data = await resp.json();
+
+      if (!resp.ok) {
+        errorBox.textContent = data.detail || `Error ${resp.status}`;
+        errorBox.style.display = 'block';
+      } else {
+        banner.className = `verdict-banner verdict-${data.verdict}`;
+        banner.textContent = `${data.verdict}${data.cached ? ' (cached)' : ''}`;
+        raw.textContent = JSON.stringify(data, null, 2);
+        resultBox.style.display = 'block';
+      }
+    } catch (err) {
+      errorBox.textContent = 'Request failed: ' + err;
+      errorBox.style.display = 'block';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Check';
+    }
+  });
+</script>
+</body>
+</html>
