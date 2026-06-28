@@ -182,7 +182,7 @@
 
   <section>
     <div class="links">
-      <a href="/docs" class="primary">Interactive API docs (Swagger) →</a>
+      <a href="docs" class="primary">Interactive API docs (Swagger) →</a>
       <a href="https://github.com/dhananjaydave/ioc-enrichment-api">View source on GitHub →</a>
     </div>
   </section>
@@ -230,7 +230,7 @@
 
     try {
       const checksParam = encodeURIComponent(selectedChecks.join(','));
-      const resp = await fetch(`/demo/enrich?indicator=${encodeURIComponent(indicator)}&checks=${checksParam}`);
+      const resp = await fetch(`demo/enrich?indicator=${encodeURIComponent(indicator)}&checks=${checksParam}`);
       const data = await resp.json();
 
       if (!resp.ok) {
