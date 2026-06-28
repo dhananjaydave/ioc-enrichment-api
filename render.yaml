@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: ioc-enrichment-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn ioc_enrichment.api:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: VIRUSTOTAL_API_KEY
+        sync: false
+      - key: ABUSEIPDB_API_KEY
+        sync: false
+      - key: IOC_API_KEY
+        sync: false
+      - key: CACHE_TTL_SECONDS
+        value: "3600"
