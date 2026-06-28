@@ -63,6 +63,27 @@ def test_enrich_is_cached_on_second_call(monkeypatch):
     assert call_count["n"] == 1
 
 
+def test_transient_source_error_is_not_cached(monkeypatch):
+    """A rate-limited/network error shouldn't get locked in for the full
+    cache TTL - the next request should retry instead of replaying the
+    same stale failure."""
+    call_count = {"n": 0}
+
+    async def flaky_vt(indicator, indicator_type):
+        call_count["n"] += 1
+        return {"source": "virustotal", "status": "error", "reason": "rate limited"}
+
+    monkeypatch.setattr(api.vt_client, "lookup", flaky_vt)
+    monkeypatch.setattr(api.abuse_client, "lookup", _fake_abuse_skipped)
+
+    first = client.get("/enrich", params={"indicator": "6.7.8.9"})
+    second = client.get("/enrich", params={"indicator": "6.7.8.9"})
+
+    assert first.json()["cached"] is False
+    assert second.json()["cached"] is False  # not served from a cached failure
+    assert call_count["n"] == 2  # retried, not skipped
+
+
 def test_enrich_requires_api_key_when_configured(monkeypatch):
     monkeypatch.setattr(api, "API_KEY", "secret123")
     monkeypatch.setattr(api.vt_client, "lookup", _fake_vt_ok)

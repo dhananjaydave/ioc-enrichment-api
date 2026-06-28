@@ -117,7 +117,12 @@ async def _perform_enrichment(indicator: str) -> dict:
         "cached": False,
         "sources": list(results),
     }
-    cache.set(cache_key, response)
+    # Don't cache a transient failure (rate limit, network error) as if it
+    # were a stable result - that would lock in "unknown" for the full TTL
+    # even after the rate limit clears. "skipped"/"not_applicable" are fine
+    # to cache since they won't change until someone adds a key.
+    if not any(r.get("status") == "error" for r in results):
+        cache.set(cache_key, response)
     return response
 
 
